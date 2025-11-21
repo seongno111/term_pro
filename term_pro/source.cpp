@@ -268,6 +268,12 @@ void loadModelToShape(const char* filename, shape& s);
 void buffer(shape& temp);
 void lever_action(int v);
 void slot_action(int v);
+void coin_insert_ready(int v);
+void coin_insert(int v);
+void jack_pot_1(int v);
+void jack_pot_2(int v);
+void jack_pot_3(int v);
+glm::vec3 getCameraWorldPos();
 
 auto ensureNormals = [](shape& s) {
 	size_t vcount = s.vertices.size() / 3;
@@ -291,6 +297,28 @@ auto ensureNormals = [](shape& s) {
 
 shape bottom;
 shape machine;
+
+shape many_coins;
+bool m_coins = false;
+float m_coins_trans = 0.4f;
+
+shape one_coin;
+bool coin_protect = false;
+float one_coin_angle = 90.0f;
+float one_coin_translate[3] = { 0.8f, 2.0f, 1.2f };
+float coin_move_value[2] = { 0.0f };
+int coin_ready_total_steps = 60;
+int coin_ready_steps_remaining = 0;
+glm::vec3 coin_start_pos;
+glm::vec3 coin_target_pos;
+float coin_start_angle = 90.0f;
+float coin_target_angle = 0.0f;
+int camera_move_total_steps = 60;
+int camera_move_steps_remaining = 0;
+glm::vec2 camera_start_move;   // x, z
+glm::vec2 camera_target_move;  // x, z
+glm::vec2 camera_start_angle = glm::vec2(0.0f, 0.0f);   // pitch(x), yaw(y)
+glm::vec2 camera_target_angle = glm::vec2(0.0f, 0.0f);
 
 shape slot;
 float slot_angle[3] = { 0.0f };
@@ -316,7 +344,7 @@ int lastMouseX = -1;
 int lastMouseY = -1;
 float mouseSensitivity = 0.05f;
 
-bool lever_protect = false;
+bool lever_protect = true;
 
 // 추가: 커서 고정 상태 플래그
 bool cursorLocked = false;
@@ -391,6 +419,12 @@ void main(int argc, char** argv) //--- 윈도우 출력하고 콜백함수 설�
 	loadModelToShape("slot.obj", slot);
 	ensureNormals(slot);
 
+	loadModelToShape("coin.obj", one_coin);
+	ensureNormals(one_coin);
+
+	loadModelToShape("coins_L.obj", many_coins);
+	ensureNormals(many_coins);
+
 	InitBuffer();
 	glutMotionFunc(Motion);
 	// 마우스 클릭 없이 움직일 때도 카메라 회전 허용하려면 passive motion 콜백 등록
@@ -456,6 +490,8 @@ void InitBuffer() {
 	buffer(machine);
 	buffer(lever);
 	buffer(slot);
+	buffer(one_coin);
+	buffer(many_coins);
 	// 공통: 라이트 색상 초기화
 	glUseProgram(shaderProgramID);
 	GLint lightColorLocation = glGetUniformLocation(shaderProgramID, "lightColor");
@@ -483,7 +519,9 @@ void make_shaderProgram_() {
 	glDeleteShader(fragmentShader);
 	glUseProgram(shaderProgramID);
 }
+
 GLvoid drawScene() {
+	glViewport(0, 0, width, height);
 	glClearColor(bk_color[0], bk_color[1], bk_color[2], 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -565,6 +603,35 @@ GLvoid drawScene() {
 		}
 	}
 
+	if (!one_coin.vertices.empty() && !one_coin.index.empty()) {
+		glm::mat4 model_m = glm::mat4(1.0f);
+		model_m = glm::translate(model_m, glm::vec3(one_coin_translate[0], one_coin_translate[1], one_coin_translate[2]));
+		glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(one_coin_angle), glm::vec3(0.0f, 0.0f, 1.0f));
+
+		glm::mat4 UNI = glm::mat4(1.0f);
+		UNI = model_m * rotation;
+
+		if (locModel >= 0) glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(UNI));
+
+		glBindVertexArray(one_coin.vao_shape);
+		glDrawElements(GL_TRIANGLES, (GLsizei)one_coin.index.size(), GL_UNSIGNED_INT, 0);
+		glBindVertexArray(0);
+	}
+
+	if (!many_coins.vertices.empty() && !many_coins.index.empty() && m_coins) {
+		glm::mat4 model_m = glm::mat4(1.0f);
+		model_m = glm::translate(model_m, glm::vec3(0.0f, 1.0f, m_coins_trans));
+		glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
+
+		glm::mat4 UNI = glm::mat4(1.0f);
+		UNI = model_m * rotation;
+
+		if (locModel >= 0) glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(UNI));
+
+		glBindVertexArray(many_coins.vao_shape);
+		glDrawElements(GL_TRIANGLES, (GLsizei)many_coins.index.size(), GL_UNSIGNED_INT, 0);
+		glBindVertexArray(0);
+	}
 	
 	GLenum err = glGetError();
 	if (err != GL_NO_ERROR) {
@@ -581,19 +648,38 @@ GLvoid Reshape(int w, int h)
 
 GLvoid Keyboard(unsigned char key, int x, int y)
 {
+	// machine의 월드 위치 (drawScene에서 model_m = translate(0,2,0) 사용)
+	glm::vec3 machinePos = glm::vec3(0.0f, 2.0f, 0.0f);
+	// 카메라 월드 위치 계산
+	glm::vec3 camPos = getCameraWorldPos();
+
+	// 허용 범위: x 너비 3.0 (±1.5), z 거리 3.0 (±3.0)
+	float halfWidthX = 1.5f;
+	float maxZdist = 3.0f;
+
+	float dx = fabs(camPos.x - machinePos.x);
+	float dz = fabs(camPos.z - machinePos.z);
 	switch (key)
 	{
 	case 'w':
-		camera_rocate[2] += 0.1f;
+		if (mouse_control == 1) {
+			camera_rocate[2] += 0.1f;
+		}
 		break;
 	case 's':
-		camera_rocate[2] -= 0.1f;
+		if (mouse_control == 1) {
+			camera_rocate[2] -= 0.1f;
+		}
 		break;
 	case 'a':
-		camera_rocate[0] += 0.1f;
+		if (mouse_control == 1) {
+			camera_rocate[0] += 0.1f;
+		}
 		break;
 	case 'd':
-		camera_rocate[0] -= 0.1f;
+		if (mouse_control == 1) {
+			camera_rocate[0] -= 0.1f;
+		}
 		break;
 	case 'q':
 		if (!lever_protect) {
@@ -602,7 +688,17 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 		}
 		break;
 	case 'e':
-		
+		if (dx <= halfWidthX && dz <= maxZdist) {
+			if (!coin_protect) {
+				coin_protect = true;
+				coin_move_value[0] = 1.18f - one_coin_translate[0];
+				coin_move_value[1] = 1.95f - one_coin_translate[1];
+				coin_insert_ready(15);
+			}
+		}
+		else {
+			std::cerr << "Too far from machine to insert coin. camPos=(" << camPos.x << "," << camPos.y << "," << camPos.z << "), dx=" << dx << " dz=" << dz << std::endl;
+		}
 		break;
 	case 'r':
 		// 토글: 마우스 제어 모드 전환 및 커서 고정/해제 처리
@@ -697,6 +793,94 @@ void Motion(int x, int y) {
 	glutPostRedisplay();
 }
 
+glm::vec3 getCameraWorldPos() {
+	glm::mat4 view = glm::mat4(1.0f);
+	view = glm::rotate(view, glm::radians(camera_angle[0]), glm::vec3(1.0f, 0.0f, 0.0f));
+	view = glm::rotate(view, glm::radians(camera_angle[1]), glm::vec3(0.0f, 1.0f, 0.0f));
+	// drawScene에서는 Y에 -3.0f를 사용하므로 동일하게 적용
+	view = glm::translate(view, glm::vec3(camera_rocate[0], -3.0f, camera_rocate[2]));
+	glm::vec4 camWorld = glm::inverse(view) * glm::vec4(0, 0, 0, 1);
+	return glm::vec3(camWorld);
+}
+
+void coin_insert_ready(int v) {
+	// 초기 호출(v==15)일 때 카메라/코인 보간 초기화
+	if (v == 15) {
+		// 마우스 델타 초기화 및 포인터 중앙화
+		lastMouseX = -1;
+		lastMouseY = -1;
+		int cx = width / 2;
+		int cy = height / 2;
+		glutWarpPointer(cx, cy);
+
+		// 코인 보간 초기화
+		coin_ready_total_steps = 60;                // 총 프레임 수 (조절 가능)
+		coin_ready_steps_remaining = coin_ready_total_steps;
+		coin_start_pos = glm::vec3(one_coin_translate[0], one_coin_translate[1], one_coin_translate[2]);
+		coin_target_pos = glm::vec3(1.18f, 1.95f, one_coin_translate[2]); // 준비 위치
+		coin_start_angle = one_coin_angle;
+		coin_target_angle = one_coin_angle - 90.0f;
+
+		// 카메라 부드러운 이동 초기화 (x, z) 및 각도(pitch, yaw)
+		camera_move_total_steps = 60; // 동일한 프레임 수로 동기화 (필요시 변경)
+		camera_move_steps_remaining = camera_move_total_steps;
+		camera_start_move = glm::vec2(camera_rocate[0], camera_rocate[2]);
+		camera_target_move = glm::vec2(0.0f, -3.2f); // 목표 position (x, z)
+
+		// 카메라 각도 목표 설정 (pitch, yaw)
+		camera_start_angle = glm::vec2(camera_angle[0], camera_angle[1]);
+		camera_target_angle = glm::vec2(10.0f, 0.0f); // 예: 살짝 내려다보는 각도, 정면
+
+		// 수동 제어 잠금 (마우스로 더이상 조작하지 않음)
+		mouse_control = 0;
+	}
+
+	// 보간이 남아있으면 한 프레임 분 만큼 선형 보간해서 코인/카메라 이동
+	if (coin_ready_steps_remaining > 0) {
+		// t: 0..1 보간 계수
+		float stepIndex = static_cast<float>(coin_ready_total_steps - coin_ready_steps_remaining + 1);
+		float t = stepIndex / static_cast<float>(coin_ready_total_steps);
+		// 필요하면 easing 적용: t = 1 - pow(1 - t, 3); 등
+
+		// 코인 위치/각도 보간 (선형)
+		glm::vec3 pos = coin_start_pos * (1.0f - t) + coin_target_pos * t;
+		one_coin_translate[0] = pos.x;
+		one_coin_translate[1] = pos.y;
+		one_coin_angle = coin_start_angle * (1.0f - t) + coin_target_angle * t;
+
+		// 카메라 보간 (x, z) 및 각도 (pitch, yaw)
+		if (camera_move_steps_remaining > 0) {
+			float camStepIndex = static_cast<float>(camera_move_total_steps - camera_move_steps_remaining + 1);
+			float ct = camStepIndex / static_cast<float>(camera_move_total_steps);
+			// 위치 보간
+			glm::vec2 camPos = camera_start_move * (1.0f - ct) + camera_target_move * ct;
+			camera_rocate[0] = camPos.x;
+			camera_rocate[2] = camPos.y;
+			// 각도 보간 (pitch, yaw)
+			camera_angle[0] = camera_start_angle.x * (1.0f - ct) + camera_target_angle.x * ct;
+			camera_angle[1] = camera_start_angle.y * (1.0f - ct) + camera_target_angle.y * ct;
+
+			camera_move_steps_remaining--;
+		}
+		coin_ready_steps_remaining--;
+		glutPostRedisplay();
+		glutTimerFunc(16, coin_insert_ready, v - 1);
+		return;
+	}
+
+	// 준비 보간 완료 -> 실제 삽입 동작 시작
+	coin_insert(0);
+}
+
+void coin_insert(int v) {
+	if (one_coin_translate[2] <= 0.0f) { lever_protect = false; return; }
+
+	one_coin_translate[2] -= 1.2f / 30.0f;
+
+	glutPostRedisplay();
+	glutTimerFunc(16, coin_insert, v);
+}
+
 void lever_action(int v) {
 	if (v < 15) {
 		lever_angle += 90.0f / 15.0f;
@@ -717,11 +901,12 @@ void lever_action(int v) {
 		slot_action(2);
 		return;
 	}
+	glutPostRedisplay();
 	glutTimerFunc(16, lever_action, v + 1);
 }
 
 void slot_action(int v) {
-	if (slot_value[v] == 0) return;
+	if (slot_value[v] == 0) { jack_pot_1(60); return; }
 
 	slot_angle[v] += 360.f/7/15;
 	if (slot_angle[v] == 360.0f) slot_angle[v] = 0.0f;
@@ -732,6 +917,105 @@ void slot_action(int v) {
 	return;
 }
 
+void jack_pot_1(int v) {
+	const int steps = 60;            // 보간 프레임 수 (원하면 조절)
+	const float backDelta = -0.3f;   // z 방향으로 뒤로 물러나는 양 (음수 = 더 멀어짐)
+	const float pitchDelta = 8.0f;   // 아래로 기울이는 각도(도)
+
+	// 초기화: 호출할 때 v == steps 로 시작하세요.
+	if (v == steps) {
+		m_coins = true;
+		camera_move_total_steps = steps;
+		camera_move_steps_remaining = steps;
+		camera_start_move = glm::vec2(camera_rocate[0], camera_rocate[2]);
+		// 현재 위치에서 z를 backDelta만큼 더함 (더 멀어지게)
+		camera_target_move = glm::vec2(camera_start_move.x, camera_start_move.y + backDelta);
+
+		camera_start_angle = glm::vec2(camera_angle[0], camera_angle[1]);
+		camera_target_angle = glm::vec2(camera_start_angle.x + pitchDelta, camera_start_angle.y);
+
+		// 사용자 입력 잠금
+		mouse_control = 0;
+	}
+
+	// 보간이 남아있으면 한 프레임 분 보간
+	if (camera_move_steps_remaining > 0) {
+		float stepIndex = static_cast<float>(camera_move_total_steps - camera_move_steps_remaining + 1);
+		float t = stepIndex / static_cast<float>(camera_move_total_steps);
+
+		// 위치 보간 (x, z)
+		glm::vec2 camPos = camera_start_move * (1.0f - t) + camera_target_move * t;
+		camera_rocate[0] = camPos.x;
+		camera_rocate[2] = camPos.y;
+
+		// 각도 보간 (pitch, yaw)
+		camera_angle[0] = camera_start_angle.x * (1.0f - t) + camera_target_angle.x * t;
+		camera_angle[1] = camera_start_angle.y * (1.0f - t) + camera_target_angle.y * t;
+
+		camera_move_steps_remaining--;
+		glutPostRedisplay();
+		glutTimerFunc(16, jack_pot_1, v - 1);
+		return;
+	}
+	jack_pot_2(0);
+}
+
+void jack_pot_2(int v) {
+	if (v < 120) {
+		m_coins_trans += 0.1f / 15.0f;
+		glutPostRedisplay();
+		glutTimerFunc(16, jack_pot_2, v+1);
+		return;
+	}
+
+	jack_pot_3(120);
+	glutPostRedisplay();
+}
+
+void jack_pot_3(int v) {
+	const int steps = 120;            // 보간 프레임 수 (원하면 조절)
+	const float backDelta = 0.6f;   // z 방향으로 뒤로 물러나는 양 (음수 = 더 멀어짐)
+	const float pitchDelta = -16.0f;   // 아래로 기울이는 각도(도)
+
+	// 초기화: 호출할 때 v == steps 로 시작하세요.
+	if (v == steps) {
+		m_coins = true;
+		camera_move_total_steps = steps;
+		camera_move_steps_remaining = steps;
+		camera_start_move = glm::vec2(camera_rocate[0], camera_rocate[2]);
+		// 현재 위치에서 z를 backDelta만큼 더함 (더 멀어지게)
+		camera_target_move = glm::vec2(camera_start_move.x, camera_start_move.y + backDelta);
+
+		camera_start_angle = glm::vec2(camera_angle[0], camera_angle[1]);
+		camera_target_angle = glm::vec2(camera_start_angle.x + pitchDelta, camera_start_angle.y);
+
+		// 사용자 입력 잠금
+		mouse_control = 0;
+	}
+
+	// 보간이 남아있으면 한 프레임 분 보간
+	if (camera_move_steps_remaining > 0) {
+		float stepIndex = static_cast<float>(camera_move_total_steps - camera_move_steps_remaining + 1);
+		float t = stepIndex / static_cast<float>(camera_move_total_steps);
+
+		// 위치 보간 (x, z)
+		glm::vec2 camPos = camera_start_move * (1.0f - t) + camera_target_move * t;
+		camera_rocate[0] = camPos.x;
+		camera_rocate[2] = camPos.y;
+
+		// 각도 보간 (pitch, yaw)
+		camera_angle[0] = camera_start_angle.x * (1.0f - t) + camera_target_angle.x * t;
+		camera_angle[1] = camera_start_angle.y * (1.0f - t) + camera_target_angle.y * t;
+
+		camera_move_steps_remaining--;
+		glutPostRedisplay();
+		glutTimerFunc(16, jack_pot_3, v - 1);
+		return;
+	}
+	m_coins_trans = 0.4f;
+	m_coins = false;
+	glutPostRedisplay();
+}
 
 void loadModelToShape(const char* filename, shape& s) {
 	// Model 구조체는 obj_header.h에 정의되어 있음
