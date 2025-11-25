@@ -21,9 +21,12 @@ void InitBuffer();
 GLvoid drawScene();
 GLvoid Reshape(int w, int h);
 GLvoid Keyboard(unsigned char key, int x, int y);
+GLvoid KeyboardUp(unsigned char key, int x, int y);
 void Motion(int x, int y);
+void processKeyHolds(int v);
 
 int mouse_control = 1;
+static std::array<bool, 256> g_keyDown = {};
 
 class shape {
 public:
@@ -266,7 +269,8 @@ public:
 
 void loadModelToShape(const char* filename, shape& s);
 void buffer(shape& temp);
-void lever_action(int v);
+void lever_action_1(int v);
+void lever_action_2(int v);
 void slot_action(int v);
 void coin_insert_ready(int v);
 void coin_insert(int v);
@@ -324,6 +328,7 @@ shape slot;
 float slot_angle[3] = { 0.0f };
 int slot_value[3] = {0};
 int slot_target[3] = { 0,0,0 };
+int slot_speed = 0;
 
 shape lever;
 float lever_angle = 0.0f;
@@ -432,6 +437,8 @@ void main(int argc, char** argv) //--- 윈도우 출력하고 콜백함수 설�
 	glutDisplayFunc(drawScene); //--- 출력 콜백 함수
 	glutReshapeFunc(Reshape);
 	glutKeyboardFunc(Keyboard);
+	glutKeyboardUpFunc(KeyboardUp);
+	glutIgnoreKeyRepeat(1);
 
 	// 시작 시 mouse_control == 1이면 커서 고정(중앙)으로 설정
 	if (mouse_control == 1) {
@@ -444,7 +451,7 @@ void main(int argc, char** argv) //--- 윈도우 출력하고 콜백함수 설�
 		lastMouseX = -1;
 		lastMouseY = -1;
 	}
-
+	glutTimerFunc(16, processKeyHolds, 0);
 	glutMainLoop();
 }
 
@@ -659,6 +666,10 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 
 	float dx = fabs(camPos.x - machinePos.x);
 	float dz = fabs(camPos.z - machinePos.z);
+	unsigned char k = static_cast<unsigned char>(key);
+	if (!g_keyDown[key]) {
+		g_keyDown[key] = true;
+	}
 	switch (key)
 	{
 	case 'w':
@@ -684,7 +695,7 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 	case 'q':
 		if (!lever_protect) {
 			lever_protect = true;
-			lever_action(0);
+			lever_action_1(0);
 		}
 		break;
 	case 'e':
@@ -727,6 +738,48 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 	}
 	InitBuffer();
 	glutPostRedisplay();
+}
+GLvoid KeyboardUp(unsigned char key, int x, int y)
+{
+	unsigned char k = static_cast<unsigned char>(key);
+	switch (key)
+	{
+	case 'q':
+		if (lever_protect) {
+			lever_action_2(15);
+		}
+		break;
+	}
+
+	if (g_keyDown[k]) g_keyDown[k] = false;
+
+}
+
+void processKeyHolds(int v)
+{
+	// 호출 주기: 약 16ms (60FPS). 필요한 경우 변경.
+	const float camSpeed = 0.05f;    // 한 틱당 카메라 이동량
+	const float leverSpeed = 6.0f;  // 한 틱당 레버 회전(도)
+
+	// 이동 키(마우스 제어 모드일 때만)
+	if (mouse_control == 1) {
+		if (g_keyDown[(unsigned char)'w']) camera_rocate[2] += camSpeed;
+		if (g_keyDown[(unsigned char)'s']) camera_rocate[2] -= camSpeed;
+		if (g_keyDown[(unsigned char)'a']) camera_rocate[0] += camSpeed;
+		if (g_keyDown[(unsigned char)'d']) camera_rocate[0] -= camSpeed;
+	}
+
+
+	if (g_keyDown[(unsigned char)'q']) {
+		if (lever_protect) {
+			if (slot_speed < 29) {
+				slot_speed += 1;
+			}
+		}
+	}
+
+	glutPostRedisplay();
+	glutTimerFunc(16, processKeyHolds, 0);
 }
 
 void Motion(int x, int y) {
@@ -881,18 +934,26 @@ void coin_insert(int v) {
 	glutTimerFunc(16, coin_insert, v);
 }
 
-void lever_action(int v) {
+void lever_action_1(int v) {
 	if (v < 15) {
 		lever_angle += 90.0f / 15.0f;
 	}
-	else if (v < 30) {
+	else {
+		return;
+	}
+	glutPostRedisplay();
+	glutTimerFunc(16, lever_action_1, v + 1);
+}
+
+void lever_action_2(int v) {
+	if (v < 30) {
 		lever_angle -= 90.0f / 15.0f;
 	}
 	else {
 		lever_protect = false;
 
 		for (int i = 0; i < 3; i++) {
-			slot_value[i] = 15*28+15*i;
+			slot_value[i] = 15 * 28 + 15 * i;
 		}
 
 		// 각 슬롯 애니메이션 시작
@@ -902,34 +963,45 @@ void lever_action(int v) {
 		return;
 	}
 	glutPostRedisplay();
-	glutTimerFunc(16, lever_action, v + 1);
+	glutTimerFunc(16, lever_action_2, v + 1);
 }
 
 void slot_action(int v) {
-	if (slot_value[v] == 0) { jack_pot_1(60); return; }
+	if (slot_value[v] == 0) {if(v == 2) jack_pot_1(60); return; }
 
 	slot_angle[v] += 360.f/7/15;
 	if (slot_angle[v] == 360.0f) slot_angle[v] = 0.0f;
 	
 	slot_value[v]--;
 	glutPostRedisplay();
-	glutTimerFunc(16, slot_action, v);
+	glutTimerFunc(30 - slot_speed, slot_action, v);
 	return;
 }
 
-void jack_pot_1(int v) {
-	const int steps = 60;            // 보간 프레임 수 (원하면 조절)
-	const float backDelta = -0.3f;   // z 방향으로 뒤로 물러나는 양 (음수 = 더 멀어짐)
-	const float pitchDelta = 8.0f;   // 아래로 기울이는 각도(도)
+glm::vec2 camera_saved_move = glm::vec2(0.0f, -10.0f); // x, z
+glm::vec2 camera_saved_angle_vec = glm::vec2(0.0f, 0.0f); // pitch, yaw
+bool camera_saved_flag = false;
 
-	// 초기화: 호출할 때 v == steps 로 시작하세요.
+void jack_pot_1(int v) {
+	const int steps = 60;
+	const float backDelta = -0.3f;
+	const float pitchDelta = 8.0f;
+
 	if (v == steps) {
+		// 저장된 값이 없으면 시작 상태를 저장 (한 번만)
+		if (!camera_saved_flag) {
+			camera_saved_move = glm::vec2(camera_rocate[0], camera_rocate[2]);
+			camera_saved_angle_vec = glm::vec2(camera_angle[0], camera_angle[1]);
+			camera_saved_flag = true;
+		}
+
 		m_coins = true;
 		camera_move_total_steps = steps;
 		camera_move_steps_remaining = steps;
 		camera_start_move = glm::vec2(camera_rocate[0], camera_rocate[2]);
-		// 현재 위치에서 z를 backDelta만큼 더함 (더 멀어지게)
-		camera_target_move = glm::vec2(camera_start_move.x, camera_start_move.y + backDelta);
+
+		// 목표는 저장된 값 기준으로 계산 (상대 누적 방지)
+		camera_target_move = glm::vec2(camera_saved_move.x, camera_saved_move.y + backDelta);
 
 		camera_start_angle = glm::vec2(camera_angle[0], camera_angle[1]);
 		camera_target_angle = glm::vec2(camera_start_angle.x + pitchDelta, camera_start_angle.y);
@@ -938,17 +1010,15 @@ void jack_pot_1(int v) {
 		mouse_control = 0;
 	}
 
-	// 보간이 남아있으면 한 프레임 분 보간
+	// 보간 루틴(기존 코드 유지)...
 	if (camera_move_steps_remaining > 0) {
 		float stepIndex = static_cast<float>(camera_move_total_steps - camera_move_steps_remaining + 1);
 		float t = stepIndex / static_cast<float>(camera_move_total_steps);
 
-		// 위치 보간 (x, z)
 		glm::vec2 camPos = camera_start_move * (1.0f - t) + camera_target_move * t;
 		camera_rocate[0] = camPos.x;
 		camera_rocate[2] = camPos.y;
 
-		// 각도 보간 (pitch, yaw)
 		camera_angle[0] = camera_start_angle.x * (1.0f - t) + camera_target_angle.x * t;
 		camera_angle[1] = camera_start_angle.y * (1.0f - t) + camera_target_angle.y * t;
 
@@ -968,23 +1038,30 @@ void jack_pot_2(int v) {
 		return;
 	}
 
-	jack_pot_3(120);
+	jack_pot_3(60);
 	glutPostRedisplay();
 }
 
 void jack_pot_3(int v) {
-	const int steps = 120;            // 보간 프레임 수 (원하면 조절)
-	const float backDelta = 0.6f;   // z 방향으로 뒤로 물러나는 양 (음수 = 더 멀어짐)
-	const float pitchDelta = -16.0f;   // 아래로 기울이는 각도(도)
+	const int steps = 60;
+	const float backDelta = 0.3f;
+	const float pitchDelta = -8.0f;
 
-	// 초기화: 호출할 때 v == steps 로 시작하세요.
 	if (v == steps) {
+		// 만약 아직 저장이 안 되어 있으면 보정용으로 저장 (안전)
+		if (!camera_saved_flag) {
+			camera_saved_move = glm::vec2(camera_rocate[0], camera_rocate[2]);
+			camera_saved_angle_vec = glm::vec2(camera_angle[0], camera_angle[1]);
+			camera_saved_flag = true;
+		}
+
 		m_coins = true;
 		camera_move_total_steps = steps;
 		camera_move_steps_remaining = steps;
 		camera_start_move = glm::vec2(camera_rocate[0], camera_rocate[2]);
-		// 현재 위치에서 z를 backDelta만큼 더함 (더 멀어지게)
-		camera_target_move = glm::vec2(camera_start_move.x, camera_start_move.y + backDelta);
+
+		// 목표는 저장된 값 기준으로 계산 (상대 누적 방지)
+		camera_target_move = glm::vec2(camera_saved_move.x, camera_saved_move.y + backDelta);
 
 		camera_start_angle = glm::vec2(camera_angle[0], camera_angle[1]);
 		camera_target_angle = glm::vec2(camera_start_angle.x + pitchDelta, camera_start_angle.y);
@@ -993,17 +1070,14 @@ void jack_pot_3(int v) {
 		mouse_control = 0;
 	}
 
-	// 보간이 남아있으면 한 프레임 분 보간
 	if (camera_move_steps_remaining > 0) {
 		float stepIndex = static_cast<float>(camera_move_total_steps - camera_move_steps_remaining + 1);
 		float t = stepIndex / static_cast<float>(camera_move_total_steps);
 
-		// 위치 보간 (x, z)
 		glm::vec2 camPos = camera_start_move * (1.0f - t) + camera_target_move * t;
 		camera_rocate[0] = camPos.x;
 		camera_rocate[2] = camPos.y;
 
-		// 각도 보간 (pitch, yaw)
 		camera_angle[0] = camera_start_angle.x * (1.0f - t) + camera_target_angle.x * t;
 		camera_angle[1] = camera_start_angle.y * (1.0f - t) + camera_target_angle.y * t;
 
@@ -1012,8 +1086,20 @@ void jack_pot_3(int v) {
 		glutTimerFunc(16, jack_pot_3, v - 1);
 		return;
 	}
+
+	// 정확히 원상복구: 저장된 값으로 복원
+	camera_rocate[0] = camera_saved_move.x;
+	camera_rocate[2] = camera_saved_move.y;
+	camera_angle[0] = camera_saved_angle_vec.x;
+	camera_angle[1] = camera_saved_angle_vec.y;
+
+	// 상태 초기화 및 사용자 제어 복원
+	camera_saved_flag = false;
 	m_coins_trans = 0.4f;
 	m_coins = false;
+	slot_speed = 0;
+	mouse_control = 1;
+
 	glutPostRedisplay();
 }
 
