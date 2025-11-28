@@ -341,8 +341,9 @@ glm::vec2 camera_target_angle = glm::vec2(0.0f, 0.0f);
 shape slot;
 float slot_angle[3] = { 0.0f };
 int slot_value[3] = { 0 };
-int slot_target[3] = { 0,0,0 };
+float slot_target[3] = { 0,0,0 };
 int slot_speed = 0;
+bool cheat_mode = false;
 
 shape lever;
 float lever_angle = 0.0f;
@@ -829,6 +830,11 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 			lever_action_1(0);
 		}
 		break;
+	case 't':
+		if (!cheat_mode) {
+			cheat_mode = true;
+		}
+		break;
 	case 'e':
 		if (dx <= halfWidthX && dz <= maxZdist) {
 			if (!coin_protect && !coin_inserted) {
@@ -1101,11 +1107,43 @@ void lever_action_2(int v) {
 	}
 	else {
 		lever_protect = false;
-		int temp = rand() % 10;
-		for (int i = 0; i < 3; i++) {
-			slot_value[i] = 15 * (28+temp) + 15 * i;
-		}
+		const float sector = 360.0f / 7.0f;
+		const float delta = sector / 15.0f; // slot_action에서 쓰이는 증가량과 동일하게
 
+		if (!cheat_mode) {
+			int temp = rand() % 10;
+			for (int i = 0; i < 3; i++) {
+				slot_value[i] = 15 * (28 + temp + i);
+				// optional: set a target based on steps
+				slot_target[i] = std::fmod(slot_angle[i] + slot_value[i] * delta, 360.0f);
+			}
+		}
+		else {
+			for (int i = 0; i < 3; i++) {
+				// 현재 각도를 0..360 범위로 정규화
+				float ang = std::fmod(slot_angle[i], 360.0f);
+				if (ang < 0.0f) ang += 360.0f;
+
+				// 다음 sector 배수(ceil)로 향하게 설정: target = ceil(ang / sector) * sector
+				float target = std::ceil(ang / sector) * sector;
+				// target을 0..360 범위로 줄임
+				target = std::fmod(target, 360.0f);
+				if (target < 0.0f) target += 360.0f;
+
+				// 남은 각도(0..360)
+				float remain = target - ang;
+				if (remain < 0.0f) remain += 360.0f;
+
+				// 필요한 정수 스텝 수 (delta 단위)
+				int steps = static_cast<int>(std::ceil(remain / delta));
+
+				// 만약 remain이 거의 0이면 steps 0으로 (이미 정렬된 경우)
+				if (remain < 1e-5f) steps = 0;
+
+				slot_value[i] = steps;
+				slot_target[i] = target;
+			}
+		}
 		// 각 슬롯 애니메이션 시작
 		slot_action(0);
 		slot_action(1);
@@ -1117,17 +1155,41 @@ void lever_action_2(int v) {
 }
 
 void slot_action(int v) {
+	const float sector = 360.0f / 7.0f;
+	const float delta = sector / 15.0f; // 항상 동일한 정의 사용
+
 	if (slot_value[v] == 0) {
+		// 종료 시점에 목표가 있으면 정확히 그 값으로 일치시킴
+		// cheat_mode에서 설정된 slot_target을 사용하거나, 없으면 현재 각도를 sector의 가장 가까운 배수로 스냅
+		if (slot_target[v] != 0.0f || cheat_mode) {
+			// slot_target은 0..360 범위의 목표값이거나 0.0f(default)
+			// 만약 slot_target==0이면서 실제 목표가 0인 경우도 고려됨
+			slot_angle[v] = slot_target[v];
+		}
+		else {
+			// 일반 모드에서 누적 오차 보정: 가장 가까운 sector 배수로 스냅
+			float ang = std::fmod(slot_angle[v], 360.0f);
+			if (ang < 0.0f) ang += 360.0f;
+			int k = static_cast<int>(std::round(ang / sector));
+			slot_angle[v] = std::fmod(k * sector, 360.0f);
+			if (slot_angle[v] < 0.0f) slot_angle[v] += 360.0f;
+		}
+
+		// 마지막 슬롯이면 jackpot 체크 유지
 		if (v == 2) {
-			if (slot_angle[0] == 0.0f && slot_angle[1] == 0.0f && slot_angle[2] == 0.0f) {
+			if (std::fabs(std::fmod(slot_angle[0], sector)) < 1e-3f &&
+				std::fabs(std::fmod(slot_angle[1], sector)) < 1e-3f &&
+				std::fabs(std::fmod(slot_angle[2], sector)) < 1e-3f) {
 				jack_pot_1(60);
 			}
 		}
 		return;
 	}
 
-	slot_angle[v] += 360.f / 7 / 15;
-	if (slot_angle[v] == 360.0f) slot_angle[v] = 0.0f;
+	// 회전
+	slot_angle[v] += delta;
+	// 정규화
+	if (slot_angle[v] >= 360.0f) slot_angle[v] -= 360.0f;
 
 	slot_value[v]--;
 	glutPostRedisplay();
@@ -1240,6 +1302,7 @@ void jack_pot_3(int v) {
 		camera_move_steps_remaining--;
 		glutPostRedisplay();
 		glutTimerFunc(16, jack_pot_3, v - 1);
+		cheat_mode = false;
 		return;
 	}
 
