@@ -12,7 +12,17 @@
 #include <gl/glm/ext.hpp>
 #include <gl/glm/gtc/matrix_transform.hpp>
 #include "obj_header.h"
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <cctype>
+#include <unordered_map>
+#include <cstdint>
 
+GLuint g_textureID = 0;
+GLuint loadTexture(const char* path);
 //--- 아래 5개 함수는 사용자 정의 함수 임
 void make_vertexShaders();
 void make_fragmentShaders();
@@ -34,12 +44,14 @@ public:
 	std::vector<GLfloat> colors;
 	std::vector<GLfloat> normals;                // 추가: 정점 노멀
 	std::vector<unsigned int> index;
+	std::vector<GLfloat> texcoords;
 	int mv_state;
 	int shape_kind;
 	int de;
 	int at_mv;
 	int valid;
-	GLuint vao_shape, vbo_shape[3], ebo_shape;   // vbo 3개로 확장: 0=pos,1=normal,2=color
+	GLuint vao_shape, vbo_shape[4], ebo_shape;   // vbo 3개로 확장: 0=pos,1=normal,2=color
+	GLuint textureID = 0;
 
 	void shape_s(GLfloat v[3][3], GLfloat c[9], int sh) {
 		shape_kind = sh;
@@ -274,6 +286,7 @@ void lever_action_2(int v);
 void slot_action(int v);
 void coin_insert_ready(int v);
 void coin_insert(int v);
+void coin_drop(int v);
 void jack_pot_1(int v);
 void jack_pot_2(int v);
 void jack_pot_3(int v);
@@ -297,7 +310,7 @@ auto ensureNormals = [](shape& s) {
 	else if (ncount != vcount) {
 		std::cerr << "  -> WARNING: normals count != vertex count\n";
 	}
-};
+	};
 
 shape bottom;
 shape machine;
@@ -308,6 +321,7 @@ float m_coins_trans = 0.4f;
 
 shape one_coin;
 bool coin_protect = false;
+bool coin_inserted = false;
 float one_coin_angle = 90.0f;
 float one_coin_translate[3] = { 0.8f, 2.0f, 1.2f };
 float coin_move_value[2] = { 0.0f };
@@ -326,7 +340,7 @@ glm::vec2 camera_target_angle = glm::vec2(0.0f, 0.0f);
 
 shape slot;
 float slot_angle[3] = { 0.0f };
-int slot_value[3] = {0};
+int slot_value[3] = { 0 };
 int slot_target[3] = { 0,0,0 };
 int slot_speed = 0;
 
@@ -393,11 +407,18 @@ void main(int argc, char** argv) //--- 윈도우 출력하고 콜백함수 설�
 	glutInitWindowPosition(100, 100);
 	glutInitWindowSize(width, height);
 	glutCreateWindow("Example1");
-	//--- GLEW 초기화하기
+
+	//--- GLEW 초기화하기 (한 번만)
 	glewExperimental = GL_TRUE;
+	GLenum glewErr = glewInit();
+	if (glewErr != GLEW_OK) {
+		std::cerr << "ERROR: glewInit() failed: " << glewGetErrorString(glewErr) << std::endl;
+		exit(EXIT_FAILURE);
+	}
+	// 이제 안전하게 OpenGL 상태를 설정
 	glEnable(GL_DEPTH_TEST);
 	/*glEnable(GL_CULL_FACE);*/
-	glewInit();
+
 	make_shaderProgram_();
 	GLfloat b_v[4][3] = {
 		{-100.0f, 0.0f, -100.0f},
@@ -503,6 +524,58 @@ void InitBuffer() {
 	glUseProgram(shaderProgramID);
 	GLint lightColorLocation = glGetUniformLocation(shaderProgramID, "lightColor");
 	if (lightColorLocation >= 0) glUniform3f(lightColorLocation, 1.0f, 1.0f, 1.0f);
+
+	if (slot.textureID == 0) {
+		slot.textureID = loadTexture("slot.png");
+		if (slot.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, slot.textureID);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glBindTexture(GL_TEXTURE_2D, 0);
+		}
+	}
+	if (machine.textureID == 0) {
+		machine.textureID = loadTexture("machine.png");
+		if (machine.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, machine.textureID);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glBindTexture(GL_TEXTURE_2D, 0);
+		}
+	}
+	if (one_coin.textureID == 0) {
+		one_coin.textureID = loadTexture("coin.png");
+		if (one_coin.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, one_coin.textureID);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glBindTexture(GL_TEXTURE_2D, 0);
+		}
+	}
+	if (lever.textureID == 0) {
+		lever.textureID = loadTexture("lever.png");
+		if (lever.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, lever.textureID);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glBindTexture(GL_TEXTURE_2D, 0);
+		}
+	}
+	if (many_coins.textureID == 0) {
+		many_coins.textureID = loadTexture("many_coin.png");
+		if (many_coins.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, many_coins.textureID);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glBindTexture(GL_TEXTURE_2D, 0);
+		}
+	}
+	GLint texLoc = glGetUniformLocation(shaderProgramID, "texSampler");
+	if (texLoc >= 0) {
+		glUniform1i(texLoc, 0);
+	}
+	GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+	if (useTexLoc >= 0) glUniform1i(useTexLoc, g_textureID ? 1 : 0);
 }
 
 void make_shaderProgram_() {
@@ -568,6 +641,12 @@ GLvoid drawScene() {
 
 	// machine 그리기 (있을 때)
 	if (!machine.vertices.empty() && !machine.index.empty()) {
+		if (machine.textureID != 0) {
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, machine.textureID);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 1);
+		}
 		glm::mat4 model_m = glm::mat4(1.0f);
 		model_m = glm::translate(model_m, glm::vec3(0.0f, 2.0f, 0.0f));
 
@@ -576,9 +655,21 @@ GLvoid drawScene() {
 		glBindVertexArray(machine.vao_shape);
 		glDrawElements(GL_TRIANGLES, (GLsizei)machine.index.size(), GL_UNSIGNED_INT, 0);
 		glBindVertexArray(0);
+
+		if (machine.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, 0);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 0);
+		}
 	}
 
 	if (!lever.vertices.empty() && !lever.index.empty()) {
+		if (lever.textureID != 0) {
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, lever.textureID);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 1);
+		}
 		glm::mat4 model_m = glm::mat4(1.0f);
 		model_m = glm::translate(model_m, glm::vec3(1.14f, 2.7f, 0.0f));
 		glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(lever_angle), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -591,12 +682,24 @@ GLvoid drawScene() {
 		glBindVertexArray(lever.vao_shape);
 		glDrawElements(GL_TRIANGLES, (GLsizei)lever.index.size(), GL_UNSIGNED_INT, 0);
 		glBindVertexArray(0);
+		if (lever.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, 0);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 0);
+		}
 	}
 
 	if (!slot.vertices.empty() && !slot.index.empty()) {
+		// 텍스처 바인드
+		if (slot.textureID != 0) {
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, slot.textureID);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 1);
+		}
 		for (int i = 0; i < 3; i++) {
 			glm::mat4 model_m = glm::mat4(1.0f);
-			model_m = glm::translate(model_m, glm::vec3(0.5f*i-0.5f, 2.7f, 0.5f));
+			model_m = glm::translate(model_m, glm::vec3(0.5f * i - 0.5f, 2.7f, 0.5f));
 			glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(slot_angle[i]), glm::vec3(1.0f, 0.0f, 0.0f));
 
 			glm::mat4 UNI = glm::mat4(1.0f);
@@ -608,9 +711,21 @@ GLvoid drawScene() {
 			glDrawElements(GL_TRIANGLES, (GLsizei)slot.index.size(), GL_UNSIGNED_INT, 0);
 			glBindVertexArray(0);
 		}
+		// 텍스처 언바인드 및 플래그 끄기
+		if (slot.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, 0);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 0);
+		}
 	}
 
 	if (!one_coin.vertices.empty() && !one_coin.index.empty()) {
+		if (one_coin.textureID != 0) {
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, one_coin.textureID);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 1);
+		}
 		glm::mat4 model_m = glm::mat4(1.0f);
 		model_m = glm::translate(model_m, glm::vec3(one_coin_translate[0], one_coin_translate[1], one_coin_translate[2]));
 		glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(one_coin_angle), glm::vec3(0.0f, 0.0f, 1.0f));
@@ -623,9 +738,20 @@ GLvoid drawScene() {
 		glBindVertexArray(one_coin.vao_shape);
 		glDrawElements(GL_TRIANGLES, (GLsizei)one_coin.index.size(), GL_UNSIGNED_INT, 0);
 		glBindVertexArray(0);
+		if (one_coin.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, 0);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 0);
+		}
 	}
 
 	if (!many_coins.vertices.empty() && !many_coins.index.empty() && m_coins) {
+		if (many_coins.textureID != 0) {
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, many_coins.textureID);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 1);
+		}
 		glm::mat4 model_m = glm::mat4(1.0f);
 		model_m = glm::translate(model_m, glm::vec3(0.0f, 1.0f, m_coins_trans));
 		glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
@@ -638,8 +764,13 @@ GLvoid drawScene() {
 		glBindVertexArray(many_coins.vao_shape);
 		glDrawElements(GL_TRIANGLES, (GLsizei)many_coins.index.size(), GL_UNSIGNED_INT, 0);
 		glBindVertexArray(0);
+		if (many_coins.textureID != 0) {
+			glBindTexture(GL_TEXTURE_2D, 0);
+			GLint useTexLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+			if (useTexLoc >= 0) glUniform1i(useTexLoc, 0);
+		}
 	}
-	
+
 	GLenum err = glGetError();
 	if (err != GL_NO_ERROR) {
 		std::cerr << "GL error in drawScene(): 0x" << std::hex << err << std::dec << std::endl;
@@ -693,14 +824,14 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 		}
 		break;
 	case 'q':
-		if (!lever_protect) {
+		if (!lever_protect && coin_inserted) {
 			lever_protect = true;
 			lever_action_1(0);
 		}
 		break;
 	case 'e':
 		if (dx <= halfWidthX && dz <= maxZdist) {
-			if (!coin_protect) {
+			if (!coin_protect && !coin_inserted) {
 				coin_protect = true;
 				coin_move_value[0] = 1.18f - one_coin_translate[0];
 				coin_move_value[1] = 1.95f - one_coin_translate[1];
@@ -723,6 +854,13 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 			glutWarpPointer(cx, cy); // 중앙으로 이동
 			lastMouseX = -1;
 			lastMouseY = -1;
+			if (coin_inserted) {
+				one_coin_angle = 90.0f;
+				one_coin_translate[0] = 0.8f;
+				one_coin_translate[1] = 6.0f;
+				one_coin_translate[2] = 1.2f;
+				coin_drop(0);
+			}
 		}
 		else {
 			mouse_control = 0;
@@ -736,7 +874,7 @@ GLvoid Keyboard(unsigned char key, int x, int y)
 		}
 		break;
 	}
-	InitBuffer();
+
 	glutPostRedisplay();
 }
 GLvoid KeyboardUp(unsigned char key, int x, int y)
@@ -745,7 +883,7 @@ GLvoid KeyboardUp(unsigned char key, int x, int y)
 	switch (key)
 	{
 	case 'q':
-		if (lever_protect) {
+		if (lever_protect && coin_inserted) {
 			lever_action_2(15);
 		}
 		break;
@@ -842,7 +980,6 @@ void Motion(int x, int y) {
 	// mouse_control != 1 일때는 기존 동작 유지
 	lastMouseX = -1;
 	lastMouseY = -1;
-	InitBuffer();
 	glutPostRedisplay();
 }
 
@@ -926,12 +1063,25 @@ void coin_insert_ready(int v) {
 }
 
 void coin_insert(int v) {
-	if (one_coin_translate[2] <= 0.0f) { lever_protect = false; return; }
+	if (one_coin_translate[2] <= 0.2f) { lever_protect = false; coin_inserted = true; return; }
 
-	one_coin_translate[2] -= 1.2f / 30.0f;
+	one_coin_translate[2] -= 0.2f / 30.0f;
 
 	glutPostRedisplay();
 	glutTimerFunc(16, coin_insert, v);
+}
+
+void coin_drop(int v) {
+	if (one_coin_translate[1] <= 2.0f) {
+		coin_protect = false;
+		coin_inserted = false;
+		return; 
+	}
+
+	one_coin_translate[1] -= 0.5f / 10.0f;
+
+	glutPostRedisplay();
+	glutTimerFunc(16, coin_drop, v);
 }
 
 void lever_action_1(int v) {
@@ -951,9 +1101,9 @@ void lever_action_2(int v) {
 	}
 	else {
 		lever_protect = false;
-
+		int temp = rand() % 10;
 		for (int i = 0; i < 3; i++) {
-			slot_value[i] = 15 * 28 + 15 * i;
+			slot_value[i] = 15 * (28+temp) + 15 * i;
 		}
 
 		// 각 슬롯 애니메이션 시작
@@ -967,15 +1117,21 @@ void lever_action_2(int v) {
 }
 
 void slot_action(int v) {
-	if (slot_value[v] == 0) {if(v == 2) jack_pot_1(60); return; }
+	if (slot_value[v] == 0) {
+		if (v == 2) {
+			if (slot_angle[0] == 0.0f && slot_angle[1] == 0.0f && slot_angle[2] == 0.0f) {
+				jack_pot_1(60);
+			}
+		}
+		return;
+	}
 
-	slot_angle[v] += 360.f/7/15;
+	slot_angle[v] += 360.f / 7 / 15;
 	if (slot_angle[v] == 360.0f) slot_angle[v] = 0.0f;
-	
+
 	slot_value[v]--;
 	glutPostRedisplay();
 	glutTimerFunc(30 - slot_speed, slot_action, v);
-	return;
 }
 
 glm::vec2 camera_saved_move = glm::vec2(0.0f, -10.0f); // x, z
@@ -1034,7 +1190,7 @@ void jack_pot_2(int v) {
 	if (v < 120) {
 		m_coins_trans += 0.1f / 15.0f;
 		glutPostRedisplay();
-		glutTimerFunc(16, jack_pot_2, v+1);
+		glutTimerFunc(16, jack_pot_2, v + 1);
 		return;
 	}
 
@@ -1104,7 +1260,7 @@ void jack_pot_3(int v) {
 }
 
 void loadModelToShape(const char* filename, shape& s) {
-	// Model 구조체는 obj_header.h에 정의되어 있음
+	// read basic model (positions + faces) via existing helper
 	Model m = { nullptr, 0, nullptr, 0 };
 	read_obj_file(filename, &m);
 	if (m.vertex_count == 0 || m.face_count == 0) {
@@ -1112,98 +1268,317 @@ void loadModelToShape(const char* filename, shape& s) {
 		return;
 	}
 
-	// 초기화
-	s.vertices.clear();
-	s.colors.clear();
-	s.normals.clear();
-	s.index.clear();
-
-	s.vertices.reserve(m.vertex_count * 3);
-	s.colors.reserve(m.vertex_count * 3);
-
-	// 정점 + 기본 색상 복사
-	for (size_t i = 0; i < m.vertex_count; ++i) {
-		s.vertices.push_back(m.vertices[i].x);
-		s.vertices.push_back(m.vertices[i].y);
-		s.vertices.push_back(m.vertices[i].z);
-		// 기본 색상: 연한 회색 (원하면 변경)
-		s.colors.push_back(0.8f);
-		s.colors.push_back(0.8f);
-		s.colors.push_back(0.8f);
+	// collect per-vertex colors and vt from file (if present)
+	std::vector<glm::vec2> fileUVs;
+	std::vector<float> fileColors;
+	{
+		std::ifstream ifs(filename);
+		if (!ifs) {
+			std::cerr << "Unable to re-open OBJ for UVs: " << filename << std::endl;
+		}
+		else {
+			std::string line;
+			size_t vcount = 0;
+			while (std::getline(ifs, line)) {
+				if (line.size() < 2) continue;
+				if (line[0] == 'v' && std::isspace(static_cast<unsigned char>(line[1]))) {
+					// v x y z [r g b]
+					std::istringstream iss(line);
+					std::string tag;
+					float x, y, z;
+					iss >> tag >> x >> y >> z;
+					float r, g, b;
+					if (iss >> r >> g >> b) {
+						fileColors.push_back(r); fileColors.push_back(g); fileColors.push_back(b);
+					}
+					++vcount;
+				}
+				else if (line.rfind("vt ", 0) == 0) {
+					std::istringstream iss(line);
+					std::string tag;
+					float u, v;
+					iss >> tag >> u >> v;
+					fileUVs.emplace_back(u, v);
+				}
+			}
+			ifs.close();
+		}
 	}
 
-	// faces의 인덱스가 1-based인지 0-based인지 감지
-	unsigned int maxIdx = 0;
-	for (size_t f = 0; f < m.face_count; ++f) {
-		maxIdx = std::max(maxIdx, m.faces[f].v1);
-		maxIdx = std::max(maxIdx, m.faces[f].v2);
-		maxIdx = std::max(maxIdx, m.faces[f].v3);
+	bool haveFileColors = (fileColors.size() == m.vertex_count * 3);
+	if (haveFileColors) {
+		for (size_t i = 0; i < fileColors.size(); i += 3) {
+			if (fileColors[i] > 1.5f || fileColors[i + 1] > 1.5f || fileColors[i + 2] > 1.5f) {
+				for (size_t j = 0; j < fileColors.size(); ++j) fileColors[j] /= 255.0f;
+				break;
+			}
+		}
 	}
-	bool oneBased = (maxIdx == m.vertex_count);
 
-	// 법선 누적용 버퍼 생성
+	// compute averaged vertex normals from faces (per original vertex)
 	std::vector<glm::vec3> accum(m.vertex_count, glm::vec3(0.0f));
-
-	// 인덱스 및 면법선 누적
 	for (size_t f = 0; f < m.face_count; ++f) {
 		unsigned int ia = m.faces[f].v1;
 		unsigned int ib = m.faces[f].v2;
 		unsigned int ic = m.faces[f].v3;
-		if (oneBased) { if (ia > 0) --ia; if (ib > 0) --ib; if (ic > 0) --ic; }
-
-		// 안전 범위 검사
-		if (ia >= m.vertex_count || ib >= m.vertex_count || ic >= m.vertex_count) continue;
-
-		glm::vec3 A(s.vertices[ia * 3 + 0], s.vertices[ia * 3 + 1], s.vertices[ia * 3 + 2]);
-		glm::vec3 B(s.vertices[ib * 3 + 0], s.vertices[ib * 3 + 1], s.vertices[ib * 3 + 2]);
-		glm::vec3 C(s.vertices[ic * 3 + 0], s.vertices[ic * 3 + 1], s.vertices[ic * 3 + 2]);
-
+		glm::vec3 A(m.vertices[ia].x, m.vertices[ia].y, m.vertices[ia].z);
+		glm::vec3 B(m.vertices[ib].x, m.vertices[ib].y, m.vertices[ib].z);
+		glm::vec3 C(m.vertices[ic].x, m.vertices[ic].y, m.vertices[ic].z);
 		glm::vec3 n = glm::cross(B - A, C - A);
 		if (glm::length(n) > 1e-6f) n = glm::normalize(n);
-
-		accum[ia] += n;
-		accum[ib] += n;
-		accum[ic] += n;
-
-		s.index.push_back(static_cast<unsigned int>(ia));
-		s.index.push_back(static_cast<unsigned int>(ib));
-		s.index.push_back(static_cast<unsigned int>(ic));
+		accum[ia] += n; accum[ib] += n; accum[ic] += n;
 	}
-
-	// 정규화된 정점 노멀 생성
-	s.normals.reserve(m.vertex_count * 3);
+	std::vector<glm::vec3> vertexNormals(m.vertex_count);
 	for (size_t i = 0; i < m.vertex_count; ++i) {
 		glm::vec3 nn = glm::normalize(accum[i]);
-		if (glm::length(nn) < 1e-6f) nn = glm::vec3(0.0f, 1.0f, 0.0f); // 안전값
-		s.normals.push_back(nn.x);
-		s.normals.push_back(nn.y);
-		s.normals.push_back(nn.z);
+		if (glm::length(nn) < 1e-6f) nn = glm::vec3(0.0f, 1.0f, 0.0f);
+		vertexNormals[i] = nn;
 	}
 
+	// Re-parse faces from file to preserve vt indices (supports v, v/vt, v//vn, v/vt/vn)
+	std::ifstream ifs(filename);
+	if (!ifs) {
+		std::cerr << "Failed to open OBJ for face parsing: " << filename << std::endl;
+		// fallback: copy positions/normals/colors without UVs
+		s.vertices.clear(); s.colors.clear(); s.normals.clear(); s.index.clear(); s.texcoords.clear();
+		for (size_t i = 0; i < m.vertex_count; ++i) {
+			s.vertices.push_back(m.vertices[i].x);
+			s.vertices.push_back(m.vertices[i].y);
+			s.vertices.push_back(m.vertices[i].z);
+			if (haveFileColors) {
+				s.colors.push_back(fileColors[i * 3 + 0]); s.colors.push_back(fileColors[i * 3 + 1]); s.colors.push_back(fileColors[i * 3 + 2]);
+			}
+			else {
+				s.colors.push_back(0.8f); s.colors.push_back(0.8f); s.colors.push_back(0.8f);
+			}
+			s.normals.push_back(vertexNormals[i].x); s.normals.push_back(vertexNormals[i].y); s.normals.push_back(vertexNormals[i].z);
+			s.texcoords.push_back(0.0f); s.texcoords.push_back(0.0f);
+		}
+		for (size_t f = 0; f < m.face_count; ++f) {
+			s.index.push_back(m.faces[f].v1);
+			s.index.push_back(m.faces[f].v2);
+			s.index.push_back(m.faces[f].v3);
+		}
+		s.valid = 1;
+		if (m.vertices) free(m.vertices);
+		if (m.faces) free(m.faces);
+		return;
+	}
+
+	struct Key { unsigned int v, vt; };
+	struct KeyHash {
+		size_t operator()(Key const& k) const noexcept {
+			// size_t가 32비트일 수 있으므로 64비트로 결합
+			uint64_t a = static_cast<uint64_t>(k.v);
+			uint64_t b = static_cast<uint64_t>(k.vt);
+			return static_cast<size_t>((a << 32) ^ b);
+		}
+	};
+	struct KeyEq { bool operator()(Key const& a, Key const& b) const noexcept { return a.v == b.v && a.vt == b.vt; } };
+	std::unordered_map<Key, unsigned int, KeyHash, KeyEq> cache;
+
+	std::vector<GLfloat> outPos; outPos.reserve(m.face_count * 9);
+	std::vector<GLfloat> outNormal; outNormal.reserve(m.face_count * 9);
+	std::vector<GLfloat> outColor; outColor.reserve(m.face_count * 9);
+	std::vector<GLfloat> outUV; outUV.reserve(m.face_count * 6);
+	std::vector<unsigned int> outIndex; outIndex.reserve(m.face_count * 3);
+
+	std::string line;
+	while (std::getline(ifs, line)) {
+		if (line.size() < 2) continue;
+		if (line[0] == 'f' && std::isspace(static_cast<unsigned char>(line[1]))) {
+			std::istringstream iss(line.substr(2));
+			std::string tok;
+			std::vector<Key> faceKeys;
+			while (iss >> tok) {
+				unsigned int vi = 0, vti = UINT32_MAX;
+				// try common patterns
+				if (sscanf_s(tok.c_str(), "%u/%u/%*u", &vi, &vti) == 2) {
+					// v/vt/vn
+				}
+				else if (sscanf_s(tok.c_str(), "%u/%u", &vi, &vti) == 2) {
+					// v/vt
+				}
+				else if (sscanf_s(tok.c_str(), "%u//%*u", &vi) == 1) {
+					// v//vn
+				}
+				else if (sscanf_s(tok.c_str(), "%u", &vi) == 1) {
+					// v
+				}
+				else {
+					// fallback split
+					size_t pos = tok.find('/');
+					if (pos != std::string::npos) {
+						std::string sv = tok.substr(0, pos);
+						vi = std::stoul(sv);
+						size_t pos2 = tok.find('/', pos + 1);
+						if (pos2 != std::string::npos && pos2 > pos + 1) {
+							std::string svt = tok.substr(pos + 1, pos2 - pos - 1);
+							if (!svt.empty()) vti = std::stoul(svt);
+						}
+						else {
+							std::string svt = tok.substr(pos + 1);
+							if (!svt.empty()) vti = std::stoul(svt);
+						}
+					}
+				}
+				if (vi > 0) {
+					Key k; k.v = vi - 1;
+					k.vt = (vti == UINT32_MAX) ? UINT32_MAX : (vti - 1);
+					faceKeys.push_back(k);
+				}
+			}
+			// triangulate polygon (fan)
+			if (faceKeys.size() >= 3) {
+				for (size_t k = 1; k + 1 < faceKeys.size(); ++k) {
+					Key tri[3] = { faceKeys[0], faceKeys[k], faceKeys[k + 1] };
+					for (int ti = 0; ti < 3; ++ti) {
+						Key key = tri[ti];
+						auto it = cache.find(key);
+						if (it != cache.end()) {
+							outIndex.push_back(it->second);
+						}
+						else {
+							unsigned int newIdx = static_cast<unsigned int>(outPos.size() / 3);
+							// position
+							outPos.push_back(m.vertices[key.v].x);
+							outPos.push_back(m.vertices[key.v].y);
+							outPos.push_back(m.vertices[key.v].z);
+							// normal (from averaged per-original vertex)
+							outNormal.push_back(vertexNormals[key.v].x);
+							outNormal.push_back(vertexNormals[key.v].y);
+							outNormal.push_back(vertexNormals[key.v].z);
+							// color
+							if (haveFileColors) {
+								outColor.push_back(fileColors[key.v * 3 + 0]);
+								outColor.push_back(fileColors[key.v * 3 + 1]);
+								outColor.push_back(fileColors[key.v * 3 + 2]);
+							}
+							else {
+								outColor.push_back(0.8f); outColor.push_back(0.8f); outColor.push_back(0.8f);
+							}
+							// uv
+							if (key.vt != UINT32_MAX && key.vt < fileUVs.size()) {
+								outUV.push_back(fileUVs[key.vt].x);
+								outUV.push_back(1.0f - fileUVs[key.vt].y);
+							}
+							else {
+								outUV.push_back(0.0f); outUV.push_back(0.0f);
+							}
+							cache.emplace(key, newIdx);
+							outIndex.push_back(newIdx);
+						}
+					}
+				}
+			}
+		}
+	}
+	ifs.close();
+
+	// transfer to shape
+	s.vertices = std::move(outPos);
+	s.normals = std::move(outNormal);
+	s.colors = std::move(outColor);
+	s.texcoords = std::move(outUV);
+	s.index = std::move(outIndex);
 	s.valid = 1;
 
-	// read_obj_file이 어떤 할당 방식을 썼는지 확실치 않으므로 free 사용 (헤더가 C 스타일)
+	// UV / vertex count 검사: texcoords.size()/2 == vertices.size()/3
+	size_t vCount = s.vertices.size() / 3;
+	size_t uvCount = s.texcoords.size() / 2;
+	if (uvCount != vCount) {
+		std::cerr << "WARNING: UV count (" << uvCount << ") != vertex count (" << vCount << "). Auto-fixing UVs.\n";
+		std::vector<GLfloat> fixed;
+		fixed.reserve(vCount * 2);
+		if (uvCount == 0) {
+			// 모두 0,0 으로 채움
+			for (size_t i = 0; i < vCount; ++i) { fixed.push_back(0.0f); fixed.push_back(0.0f); }
+		}
+		else {
+			// uvCount < vCount: 반복 또는 0으로 채움 (간단한 보정)
+			for (size_t i = 0; i < vCount; ++i) {
+				size_t src = (i < uvCount) ? i : (uvCount - 1);
+				fixed.push_back(s.texcoords[src * 2 + 0]);
+				fixed.push_back(s.texcoords[src * 2 + 1]);
+			}
+		}
+		s.texcoords.swap(fixed);
+	}
+	// cleanup
 	if (m.vertices) free(m.vertices);
 	if (m.faces) free(m.faces);
+	
 }
 
 void buffer(shape& temp) {
 	glGenVertexArrays(1, &temp.vao_shape);
 	glBindVertexArray(temp.vao_shape);
-	glGenBuffers(3, temp.vbo_shape);
+	// 항상 4개의 버퍼 생성하되 사용여부는 이후에 판단
+	glGenBuffers(4, temp.vbo_shape);
+
+	// position
 	glBindBuffer(GL_ARRAY_BUFFER, temp.vbo_shape[0]);
 	glBufferData(GL_ARRAY_BUFFER, temp.vertices.size() * sizeof(GLfloat), temp.vertices.data(), GL_STATIC_DRAW);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(0);
+
+	// normal
 	glBindBuffer(GL_ARRAY_BUFFER, temp.vbo_shape[1]);
 	glBufferData(GL_ARRAY_BUFFER, temp.normals.size() * sizeof(GLfloat), temp.normals.data(), GL_STATIC_DRAW);
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(1);
+
+	// color
 	glBindBuffer(GL_ARRAY_BUFFER, temp.vbo_shape[2]);
 	glBufferData(GL_ARRAY_BUFFER, temp.colors.size() * sizeof(GLfloat), temp.colors.data(), GL_STATIC_DRAW);
 	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(2);
+
+	// texcoord (u,v) — 데이터가 없으면 attribute 비활성화
+	if (!temp.texcoords.empty()) {
+		glBindBuffer(GL_ARRAY_BUFFER, temp.vbo_shape[3]);
+		glBufferData(GL_ARRAY_BUFFER, temp.texcoords.size() * sizeof(GLfloat), temp.texcoords.data(), GL_STATIC_DRAW);
+		glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 0, 0);
+		glEnableVertexAttribArray(3);
+	} else {
+		// 버퍼는 생성되어 있으나 attribute는 사용하지 않음
+		glBindBuffer(GL_ARRAY_BUFFER, temp.vbo_shape[3]);
+		glBufferData(GL_ARRAY_BUFFER, 0, NULL, GL_STATIC_DRAW);
+		glDisableVertexAttribArray(3);
+	}
+
 	glGenBuffers(1, &temp.ebo_shape);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, temp.ebo_shape);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, temp.index.size() * sizeof(unsigned int), temp.index.data(), GL_STATIC_DRAW);
+
+	glBindVertexArray(0);
+	if (&temp == &slot) {
+		std::cerr << "slot: verts=" << temp.vertices.size() / 3 << " uvs=" << temp.texcoords.size() / 2
+			<< " idx=" << temp.index.size() << std::endl;
+	}
+	if (&temp == &machine) {
+		std::cerr << "machine: verts=" << temp.vertices.size() / 3 << " uvs=" << temp.texcoords.size() / 2
+			<< " idx=" << temp.index.size() << std::endl;
+	}
+}
+
+GLuint loadTexture(const char* path)
+{
+	int w, h, n;
+	unsigned char* data = stbi_load(path, &w, &h, &n, 4);
+	if (!data) {
+		std::cerr << "Failed to load texture: " << path << std::endl;
+		return 0;
+	}
+	GLuint tex;
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	glGenerateMipmap(GL_TEXTURE_2D);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	stbi_image_free(data);
+	return tex;
 }

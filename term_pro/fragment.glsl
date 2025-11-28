@@ -1,11 +1,14 @@
 ﻿#version 330 core
 in vec3 FragPos;
 in vec3 Normal;
+in vec2 TexCoord;
 
 uniform vec3 lightPos;
 uniform vec3 lightColor;
 uniform vec3 objectColor;
 uniform vec3 viewPos;
+uniform sampler2D texSampler;
+uniform int useTexture; // 0 = 텍스처 미사용, 1 = 사용
 
 out vec4 FragColor;
 
@@ -34,6 +37,12 @@ void main(void)
     specularLight = pow(specularLight, shininess);
     vec3 specular = specularLight * lightColor;
 
-    vec3 result = (ambient + diffuse + specular) * objectColor;
+    vec3 baseColor = objectColor;
+    if (useTexture == 1) {
+        vec4 texc = texture(texSampler, TexCoord);
+        baseColor = texc.rgb;
+    }
+
+    vec3 result = (ambient + diffuse + specular) * baseColor;
     FragColor = vec4(result, 1.0);
 }
