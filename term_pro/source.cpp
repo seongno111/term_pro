@@ -322,8 +322,8 @@ glm::vec2 camera_target_angle = glm::vec2(0.0f, 0.0f);
 shape slot;
 float slot_angle[3] = { 0.0f };
 int slot_value[3] = { 0 };
-float slot_target[3] = { 0,0,0 };
 int slot_speed = 0;
+bool slot_stop[3] = { true, true, true };
 bool cheat_mode = false;
 
 shape lever;
@@ -1028,14 +1028,13 @@ void lever_action_2(int v) {
 	}
 	else {
 		lever_protect = false;
-		const float sector = 360.0f / 7.0f;
+		const float sector = 360.0f / 8.0f;
 		const float delta = sector / 15.0f;
 
 		if (!cheat_mode) {
 			int temp = rand() % 10;
 			for (int i = 0; i < 3; i++) {
 				slot_value[i] = 15 * (28 + temp + i);
-				slot_target[i] = std::fmod(slot_angle[i] + slot_value[i] * delta, 360.0f);
 			}
 		}
 		else {
@@ -1043,11 +1042,7 @@ void lever_action_2(int v) {
 				float ang = std::fmod(slot_angle[i], 360.0f);
 				if (ang < 0.0f) ang += 360.0f;
 
-				float target = std::ceil(ang / sector) * sector;
-				target = std::fmod(target, 360.0f);
-				if (target < 0.0f) target += 360.0f;
-
-				float remain = target - ang;
+				float remain = 0.0f - ang;
 				if (remain < 0.0f) remain += 360.0f;
 
 				int steps = static_cast<int>(std::ceil(remain / delta));
@@ -1055,12 +1050,14 @@ void lever_action_2(int v) {
 				if (remain < 1e-5f) steps = 0;
 
 				slot_value[i] = steps;
-				slot_target[i] = target;
+				
 			}
 		}
-
+		slot_stop[0] = false;
 		slot_action(0);
+		slot_stop[1] = false;
 		slot_action(1);
+		slot_stop[2] = false;
 		slot_action(2);
 		return;
 	}
@@ -1069,34 +1066,22 @@ void lever_action_2(int v) {
 }
 
 void slot_action(int v) {
-	const float sector = 360.0f / 7.0f;
-	const float delta = sector / 15.0f;
-
 	if (slot_value[v] == 0) {
-		if (slot_target[v] != 0.0f || cheat_mode) {
-			slot_angle[v] = slot_target[v];
-		}
-		else {
-			float ang = std::fmod(slot_angle[v], 360.0f);
-			if (ang < 0.0f) ang += 360.0f;
-			int k = static_cast<int>(std::round(ang / sector));
-			slot_angle[v] = std::fmod(k * sector, 360.0f);
-			if (slot_angle[v] < 0.0f) slot_angle[v] += 360.0f;
-		}
-
-		if (v == 2) {
-			if (std::fabs(std::fmod(slot_angle[0], sector)) < 1e-3f &&
-				std::fabs(std::fmod(slot_angle[1], sector)) < 1e-3f &&
-				std::fabs(std::fmod(slot_angle[2], sector)) < 1e-3f) {
+		slot_stop[v] = true;
+		if (slot_stop[0] == true && slot_stop[1] == true && slot_stop[2] == true) {
+			slot_speed = 0;
+			if (slot_angle[0] == 0.0f && slot_angle[1] == 0.0f && slot_angle[2] == 0.0f) {
 				jack_pot_1(60);
 			}
 		}
+		std::cout << "Slot " << v << " stopped at angle " << slot_angle[v] << std::endl;
 		return;
 	}
+	const float sector = 360.0f / 8.0f;
+	const float delta = sector / 15.0f;
 
 	slot_angle[v] += delta;
 	if (slot_angle[v] >= 360.0f) slot_angle[v] -= 360.0f;
-
 	slot_value[v]--;
 	glutPostRedisplay();
 	glutTimerFunc(30 - slot_speed, slot_action, v);
@@ -1128,7 +1113,7 @@ void jack_pot_1(int v) {
 		camera_start_angle = glm::vec2(camera_angle[0], camera_angle[1]);
 		camera_target_angle = glm::vec2(camera_start_angle.x + pitchDelta, camera_start_angle.y);
 
-		mouse_control = 0;
+
 	}
 
 	if (camera_move_steps_remaining > 0) {
@@ -1183,8 +1168,6 @@ void jack_pot_3(int v) {
 
 		camera_start_angle = glm::vec2(camera_angle[0], camera_angle[1]);
 		camera_target_angle = glm::vec2(camera_start_angle.x + pitchDelta, camera_start_angle.y);
-
-		mouse_control = 0;
 	}
 
 	if (camera_move_steps_remaining > 0) {
